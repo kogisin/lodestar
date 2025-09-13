@@ -1,14 +1,8 @@
 import {writeFile} from "node:fs/promises";
 import path from "node:path";
-import got from "got";
+import {fetch} from "@lodestar/utils";
 import {Web3} from "web3";
-import {
-  EL_GENESIS_ACCOUNT,
-  EL_GENESIS_PASSWORD,
-  EL_GENESIS_SECRET_KEY,
-  SHARED_JWT_SECRET,
-  SIM_ENV_NETWORK_ID,
-} from "../../constants.js";
+import {EL_GENESIS_PASSWORD, EL_GENESIS_SECRET_KEY, SHARED_JWT_SECRET, SIM_ENV_NETWORK_ID} from "../../constants.js";
 import {ExecutionClient, ExecutionNodeGenerator, ExecutionStartMode, JobOptions, RunnerType} from "../../interfaces.js";
 import {getNodeMountedPaths} from "../../utils/paths.js";
 import {getNodePorts} from "../../utils/ports.js";
@@ -132,9 +126,6 @@ export const generateGethNode: ExecutionNodeGenerator<ExecutionClient.Geth> = (o
         "--nodiscover",
         "--datadir",
         rootDirMounted,
-        "--allow-insecure-unlock",
-        "--unlock",
-        EL_GENESIS_ACCOUNT,
         "--password",
         passwordPathMounted,
         "--syncmode",
@@ -144,7 +135,7 @@ export const generateGethNode: ExecutionNodeGenerator<ExecutionClient.Geth> = (o
         // Logging verbosity: 0=silent, 1=error, 2=warn, 3=info, 4=debug, 5=detail
         "--verbosity",
         "5",
-        ...(mining ? ["--mine", "--miner.etherbase", EL_GENESIS_ACCOUNT] : []),
+        ...(mining ? ["--mine"] : []),
         ...(mode === ExecutionStartMode.PreMerge ? ["--nodiscover"] : []),
         ...clientOptions,
       ],
@@ -154,7 +145,27 @@ export const generateGethNode: ExecutionNodeGenerator<ExecutionClient.Geth> = (o
       stdoutFilePath: logFilePath,
     },
     health: async () => {
-      await got.post(ethRpcPublicUrl, {json: {jsonrpc: "2.0", method: "net_version", params: [], id: 67}});
+      const res = await fetch(ethRpcPublicUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          method: "net_version",
+          params: [],
+          id: 67,
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error(`Health check failed: ${res.status} ${res.statusText}`);
+      }
+
+      const json = await res.json();
+      if (json.error) {
+        throw new Error(`JSON-RPC error: ${json.error.message}`);
+      }
     },
   };
 

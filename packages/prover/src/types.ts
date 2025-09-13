@@ -45,17 +45,17 @@ export interface JsonRpcResponseWithErrorPayload<T> {
 }
 
 // Make the very flexible el response type to match different libraries easily
-// biome-ignore lint/suspicious/noExplicitAny: <explanation>
+// biome-ignore lint/suspicious/noExplicitAny: We need to use `any` type here
 export type JsonRpcResponse<T = any, E = any> =
   | JsonRpcResponseWithResultPayload<T>
   | JsonRpcResponseWithErrorPayload<E>;
 
-// biome-ignore lint/suspicious/noExplicitAny: <explanation>
+// biome-ignore lint/suspicious/noExplicitAny: We need to use `any` type here
 export type JsonRpcBatchResponse<T = any, E = any> = JsonRpcResponse<T, E>[];
 
 // Response can be a single response or an array of responses in case of batch request
 // Make the very flexible el response type to match different libraries easily
-// biome-ignore lint/suspicious/noExplicitAny: <explanation>
+// biome-ignore lint/suspicious/noExplicitAny: We need to use `any` type here
 export type JsonRpcResponseOrBatch<T = any, E = any> = JsonRpcResponse<T, E> | JsonRpcBatchResponse<T, E>;
 
 export type HexString = string;
@@ -161,4 +161,3 @@ export type ELApiParams = {
 export type ELApiReturn = {
   [K in keyof ELApi]: ReturnType<ELApi[K]>;
 };
-/* eslint-enable @typescript-eslint/naming-convention */

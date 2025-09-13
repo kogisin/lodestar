@@ -18,7 +18,6 @@ export type SimulationInitOptions = {
   id: string;
   logsDir: string;
   forkConfig: ChainForkConfig;
-  trustedSetup?: boolean;
 };
 
 export type SimulationOptions = {
@@ -27,7 +26,6 @@ export type SimulationOptions = {
   rootDir: string;
   controller: AbortController;
   genesisTime: number;
-  trustedSetup?: boolean;
   logLevel?: LogLevel;
 };
 
@@ -131,6 +129,7 @@ export interface ExecutionGenesisOptions<E extends ExecutionClient = ExecutionCl
   cliqueSealingPeriod: number;
   shanghaiTime: number;
   cancunTime: number;
+  pragueTime: number;
   genesisTime: number;
   clientOptions: ExecutionClientsOptions[E];
 }

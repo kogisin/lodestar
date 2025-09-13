@@ -167,10 +167,8 @@ export async function validatorHandler(args: IValidatorCliArgs & GlobalArgs): Pr
       doppelgangerProtection,
       afterBlockDelaySlotFraction: args.afterBlockDelaySlotFraction,
       scAfterBlockDelaySlotFraction: args.scAfterBlockDelaySlotFraction,
-      disableAttestationGrouping: args.disableAttestationGrouping,
       valProposerConfig,
       distributed: args.distributed,
-      useProduceBlockV3: args.useProduceBlockV3,
       broadcastValidation: parseBroadcastValidation(args.broadcastValidation),
       blindedLocal: args.blindedLocal,
       externalSigner: {

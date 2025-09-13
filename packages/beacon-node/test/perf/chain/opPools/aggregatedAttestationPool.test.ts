@@ -1,7 +1,8 @@
 import {beforeAll, bench, describe} from "@chainsafe/benchmark";
 import {BitArray, toHexString} from "@chainsafe/ssz";
-import {DataAvailabilityStatus, ExecutionStatus, ForkChoice, IForkChoiceStore, ProtoArray} from "@lodestar/fork-choice";
+import {ExecutionStatus, ForkChoice, IForkChoiceStore, ProtoArray} from "@lodestar/fork-choice";
 import {HISTORICAL_ROOTS_LIMIT, SLOTS_PER_EPOCH} from "@lodestar/params";
+import {DataAvailabilityStatus} from "@lodestar/state-transition";
 import {
   CachedBeaconStateAltair,
   computeAnchorCheckpoint,
@@ -118,7 +119,7 @@ describe(`getAttestationsForBlock vc=${vc}`, () => {
         justifiedBalancesGetter: () => originalState.epochCtx.effectiveBalanceIncrements,
         equivocatingIndices: new Set(),
       };
-      forkchoice = new ForkChoice(originalState.config, fcStore, protoArray);
+      forkchoice = new ForkChoice(originalState.config, fcStore, protoArray, null);
     },
     5 * 60 * 1000
   );

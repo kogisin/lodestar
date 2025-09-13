@@ -1,6 +1,6 @@
 import {ApiClient, routes} from "@lodestar/api";
 import {ChainForkConfig} from "@lodestar/config";
-import {ForkPreElectra, ForkSeq} from "@lodestar/params";
+import {ForkSeq} from "@lodestar/params";
 import {computeEpochAtSlot, isAggregatorFromCommitteeLength} from "@lodestar/state-transition";
 import {BLSSignature, SignedAggregateAndProof, SingleAttestation, Slot, phase0, ssz} from "@lodestar/types";
 import {prettyBytes, sleep, toRootHex} from "@lodestar/utils";
@@ -16,7 +16,6 @@ import {ValidatorStore} from "./validatorStore.js";
 
 export type AttestationServiceOpts = {
   afterBlockDelaySlotFraction?: number;
-  disableAttestationGrouping?: boolean;
   distributedAggregationSelection?: boolean;
 };
 
@@ -93,91 +92,41 @@ export class AttestationService {
     await Promise.race([sleep(this.clock.msToSlot(slot + 1 / 3), signal), this.emitter.waitForBlockSlot(slot)]);
     this.metrics?.attesterStepCallProduceAttestation.observe(this.clock.secFromSlot(slot + 1 / 3));
 
-    if (this.opts?.disableAttestationGrouping) {
-      // Attestation service grouping optimization must be disabled in a distributed validator cluster as
-      // middleware clients such as Charon (https://github.com/ObolNetwork/charon) expect the actual committee index
-      // to be sent to produceAttestationData endpoint. This is required because the middleware client itself
-      // calls produceAttestationData on the beacon node for each validator and there is a slight chance that
-      // the `beacon_block_root` (LMD GHOST vote) changes between calls which would cause a conflict between
-      // attestations submitted by Lodestar and other VCs in the cluster, resulting in aggregation failure.
-      // See https://github.com/ChainSafe/lodestar/issues/5103 for further details and references.
+    // Beacon node's endpoint produceAttestationData return data is not dependent on committeeIndex.
+    // Produce a single attestation for all committees and submit unaggregated attestations in one go.
+    try {
+      // Produce a single attestation for all committees, and clone mutate before signing
+      const attestationNoCommittee = await this.produceAttestation(0, slot);
+
+      // Step 1. Mutate, and sign `Attestation` for each validator. Then publish all `Attestations` in one go
+      await this.signAndPublishAttestations(slot, attestationNoCommittee, duties);
+
+      // Step 2. after all attestations are submitted, make an aggregate.
+      // First, wait until the `aggregation_production_instant` (2/3rds of the way through the slot)
+      await sleep(this.clock.msToSlot(slot + 2 / 3), signal);
+      this.metrics?.attesterStepCallProduceAggregate.observe(this.clock.secFromSlot(slot + 2 / 3));
+
       const dutiesByCommitteeIndex = groupAttDutiesByCommitteeIndex(duties);
+      const isPostElectra = this.config.getForkSeq(slot) >= ForkSeq.electra;
+
+      // Then download, sign and publish a `SignedAggregateAndProof` for each
+      // validator that is elected to aggregate for this `slot` and `committeeIndex`.
       await Promise.all(
-        Array.from(dutiesByCommitteeIndex.entries()).map(([index, duties]) =>
-          this.runAttestationTasksPerCommittee(duties, slot, index, signal).catch((e) => {
-            this.logger.error("Error on committee attestation routine", {slot, index}, e);
-          })
-        )
+        Array.from(dutiesByCommitteeIndex.entries()).map(([index, dutiesSameCommittee]) => {
+          const attestationData: phase0.AttestationData = {...attestationNoCommittee, index: isPostElectra ? 0 : index};
+          return this.produceAndPublishAggregates(attestationData, index, dutiesSameCommittee);
+        })
       );
-    } else {
-      // Beacon node's endpoint produceAttestationData return data is not dependent on committeeIndex.
-      // Produce a single attestation for all committees and submit unaggregated attestations in one go.
-      try {
-        await this.runAttestationTasksGrouped(duties, slot, signal);
-      } catch (e) {
-        this.logger.error("Error on attestation routine", {slot}, e as Error);
-      }
+    } catch (e) {
+      this.logger.error("Error on attestation routine", {slot}, e as Error);
     }
   };
-
-  private async runAttestationTasksPerCommittee(
-    dutiesSameCommittee: AttDutyAndProof[],
-    slot: Slot,
-    index: number,
-    signal: AbortSignal
-  ): Promise<void> {
-    // Produce attestation with actual committee index
-    const attestation = await this.produceAttestation(index, slot);
-
-    // Step 1. Sign `Attestation` for each validator. Then publish all `Attestations` in one go
-    await this.signAndPublishAttestations(slot, attestation, dutiesSameCommittee);
-
-    // Step 2. after all attestations are submitted, make an aggregate.
-    // First, wait until the `aggregation_production_instant` (2/3rds of the way through the slot)
-    await sleep(this.clock.msToSlot(slot + 2 / 3), signal);
-    this.metrics?.attesterStepCallProduceAggregate.observe(this.clock.secFromSlot(slot + 2 / 3));
-
-    // Then download, sign and publish a `SignedAggregateAndProof` for each
-    // validator that is elected to aggregate for this `slot` and `committeeIndex`.
-    await this.produceAndPublishAggregates(attestation, index, dutiesSameCommittee);
-  }
-
-  private async runAttestationTasksGrouped(
-    dutiesAll: AttDutyAndProof[],
-    slot: Slot,
-    signal: AbortSignal
-  ): Promise<void> {
-    // Produce a single attestation for all committees, and clone mutate before signing
-    const attestationNoCommittee = await this.produceAttestation(0, slot);
-
-    // Step 1. Mutate, and sign `Attestation` for each validator. Then publish all `Attestations` in one go
-    await this.signAndPublishAttestations(slot, attestationNoCommittee, dutiesAll);
-
-    // Step 2. after all attestations are submitted, make an aggregate.
-    // First, wait until the `aggregation_production_instant` (2/3rds of the way through the slot)
-    await sleep(this.clock.msToSlot(slot + 2 / 3), signal);
-    this.metrics?.attesterStepCallProduceAggregate.observe(this.clock.secFromSlot(slot + 2 / 3));
-
-    const dutiesByCommitteeIndex = groupAttDutiesByCommitteeIndex(dutiesAll);
-    const isPostElectra = this.config.getForkSeq(slot) >= ForkSeq.electra;
-
-    // Then download, sign and publish a `SignedAggregateAndProof` for each
-    // validator that is elected to aggregate for this `slot` and `committeeIndex`.
-    await Promise.all(
-      Array.from(dutiesByCommitteeIndex.entries()).map(([index, dutiesSameCommittee]) => {
-        const attestationData: phase0.AttestationData = {...attestationNoCommittee, index: isPostElectra ? 0 : index};
-        return this.produceAndPublishAggregates(attestationData, index, dutiesSameCommittee);
-      })
-    );
-  }
 
   /**
    * Performs the first step of the attesting process: downloading one `Attestation` object.
    * Beacon node's endpoint produceAttestationData return data is not dependent on committeeIndex.
    * For a validator client with many validators this allows to do a single call for all committees
    * in a slot, saving resources in both the vc and beacon node
-   *
-   * Note: the actual committeeIndex must be passed in if attestation grouping is disabled
    */
   private async produceAttestation(committeeIndex: number, slot: Slot): Promise<phase0.AttestationData> {
     // Produce one attestation data per slot and committeeIndex
@@ -196,7 +145,7 @@ export class AttestationService {
     const signedAttestations: SingleAttestation[] = [];
     const headRootHex = toRootHex(attestationNoCommittee.beaconBlockRoot);
     const currentEpoch = computeEpochAtSlot(slot);
-    const isPostElectra = currentEpoch >= this.config.ELECTRA_FORK_EPOCH;
+    const isPostElectra = this.config.getForkSeq(slot) >= ForkSeq.electra;
 
     await Promise.all(
       duties.map(async ({duty}) => {
@@ -230,23 +179,10 @@ export class AttestationService {
     this.metrics?.attesterStepCallPublishAttestation.observe(this.clock.secFromSlot(slot + 1 / 3));
 
     // Step 2. Publish all `Attestations` in one go
-    const logCtx = {
-      slot,
-      // log index if attestations are published per committee
-      ...(this.opts?.disableAttestationGrouping && {index: attestationNoCommittee.index}),
-    };
     try {
-      if (isPostElectra) {
-        (await this.api.beacon.submitPoolAttestationsV2({signedAttestations})).assertOk();
-      } else {
-        (
-          await this.api.beacon.submitPoolAttestations({
-            signedAttestations: signedAttestations as SingleAttestation<ForkPreElectra>[],
-          })
-        ).assertOk();
-      }
+      (await this.api.beacon.submitPoolAttestationsV2({signedAttestations})).assertOk();
       this.logger.info("Published attestations", {
-        ...logCtx,
+        slot,
         head: prettyBytes(headRootHex),
         count: signedAttestations.length,
       });
@@ -254,7 +190,7 @@ export class AttestationService {
     } catch (e) {
       // Note: metric counts only 1 since we don't know how many signedAttestations are invalid
       this.metrics?.attestaterError.inc({error: "publish"});
-      this.logger.error("Error publishing attestations", logCtx, e as Error);
+      this.logger.error("Error publishing attestations", {slot}, e as Error);
     }
   }
 
@@ -274,7 +210,6 @@ export class AttestationService {
     duties: AttDutyAndProof[]
   ): Promise<void> {
     const logCtx = {slot: attestation.slot, index: committeeIndex};
-    const isPostElectra = this.config.getForkSeq(attestation.slot) >= ForkSeq.electra;
 
     // No validator is aggregator, skip
     if (duties.every(({selectionProof}) => selectionProof === null)) {
@@ -282,17 +217,13 @@ export class AttestationService {
     }
 
     this.logger.verbose("Aggregating attestations", logCtx);
-    const res = isPostElectra
-      ? await this.api.validator.getAggregatedAttestationV2({
-          attestationDataRoot: ssz.phase0.AttestationData.hashTreeRoot(attestation),
-          slot: attestation.slot,
-          committeeIndex,
-        })
-      : await this.api.validator.getAggregatedAttestation({
-          attestationDataRoot: ssz.phase0.AttestationData.hashTreeRoot(attestation),
-          slot: attestation.slot,
-        });
-    const aggregate = res.value();
+    const aggregate = (
+      await this.api.validator.getAggregatedAttestationV2({
+        attestationDataRoot: ssz.phase0.AttestationData.hashTreeRoot(attestation),
+        slot: attestation.slot,
+        committeeIndex,
+      })
+    ).value();
     const participants = aggregate.aggregationBits.getTrueBitIndexes().length;
     this.metrics?.numParticipantsInAggregate.observe(participants);
 
@@ -319,11 +250,7 @@ export class AttestationService {
 
     if (signedAggregateAndProofs.length > 0) {
       try {
-        if (isPostElectra) {
-          (await this.api.validator.publishAggregateAndProofsV2({signedAggregateAndProofs})).assertOk();
-        } else {
-          (await this.api.validator.publishAggregateAndProofs({signedAggregateAndProofs})).assertOk();
-        }
+        (await this.api.validator.publishAggregateAndProofsV2({signedAggregateAndProofs})).assertOk();
         this.logger.info("Published aggregateAndProofs", {
           ...logCtx,
           participants,

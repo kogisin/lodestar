@@ -110,6 +110,8 @@ export async function* sendRequest(
       throw new RequestError({code: RequestErrorCode.DIAL_ERROR, error: e});
     });
 
+    metrics?.outgoingOpenedStreams?.inc({method});
+
     // TODO: Does the TTFB timer start on opening stream or after receiving request
     const timerTTFB = metrics?.outgoingResponseTTFB.startTimer({method});
 
@@ -117,6 +119,9 @@ export async function* sendRequest(
     const protocolId = stream.protocol ?? "unknown";
     const protocol = protocolsMap.get(protocolId);
     if (!protocol) throw Error(`dialProtocol selected unknown protocolId ${protocolId}`);
+
+    // Override with actual version that was negotiated
+    logCtx.version = protocol.version;
 
     logger.debug("Req  sending request", logCtx);
 
@@ -152,8 +157,13 @@ export async function* sendRequest(
     const ttfbTimeoutController = new AbortController();
     const respTimeoutController = new AbortController();
 
-    const timeoutTTFB = setTimeout(() => ttfbTimeoutController.abort(), TTFB_TIMEOUT);
     let timeoutRESP: NodeJS.Timeout | null = null;
+
+    const timeoutTTFB = setTimeout(() => {
+      // If we abort on first byte delay, don't need to abort for response delay
+      if (timeoutRESP) clearTimeout(timeoutRESP);
+      ttfbTimeoutController.abort();
+    }, TTFB_TIMEOUT);
 
     const restartRespTimeout = (): void => {
       if (timeoutRESP) clearTimeout(timeoutRESP);
@@ -192,7 +202,7 @@ export async function* sendRequest(
       // NOTE: Only log once per request to verbose, intermediate steps to debug
       // NOTE: Do not log the response, logs get extremely cluttered
       // NOTE: add double space after "Req  " to align log with the "Resp " log
-      logger.verbose("Req  done", {...logCtx});
+      logger.verbose("Req  done", logCtx);
     } finally {
       clearTimeout(timeoutTTFB);
       if (timeoutRESP !== null) clearTimeout(timeoutRESP);
@@ -201,6 +211,8 @@ export async function* sendRequest(
       // `stream.close()` libp2p-mplex will .end() the source (it-pushable instance)
       // If collectResponses() exhausts the source, it-pushable.end() can be safely called multiple times
       await stream.close();
+      metrics?.outgoingClosedStreams?.inc({method});
+      logger.verbose("Req  stream closed", logCtx);
     }
   } catch (e) {
     logger.verbose("Req  error", logCtx, e as Error);

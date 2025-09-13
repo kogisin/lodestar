@@ -38,7 +38,6 @@ export type IValidatorCliArgs = AccountValidatorArgs &
     graffiti?: string;
     afterBlockDelaySlotFraction?: number;
     scAfterBlockDelaySlotFraction?: number;
-    disableAttestationGrouping?: boolean;
     suggestedFeeRecipient?: string;
     proposerSettingsFile?: string;
     strictFeeRecipientCheck?: boolean;
@@ -49,6 +48,7 @@ export type IValidatorCliArgs = AccountValidatorArgs &
     "builder.selection"?: string;
     "builder.boostFactor"?: string;
 
+    /** @deprecated */
     useProduceBlockV3?: boolean;
     broadcastValidation?: string;
     blindedLocal?: boolean;
@@ -223,13 +223,6 @@ export const validatorOptions: CliCommandOptions<IValidatorCliArgs> = {
     type: "number",
   },
 
-  disableAttestationGrouping: {
-    hidden: true,
-    description:
-      "Disables attestation service grouping optimization, attestation tasks will be executed per committee instead of just once for all committees.",
-    type: "boolean",
-  },
-
   proposerSettingsFile: {
     description:
       "A yaml file to specify detailed default and per validator public key customized proposer configs. PS: This feature and its format is in alpha and subject to change",
@@ -277,8 +270,9 @@ export const validatorOptions: CliCommandOptions<IValidatorCliArgs> = {
   },
 
   useProduceBlockV3: {
+    hidden: true,
+    deprecated: true,
     type: "boolean",
-    description: "Enable/disable usage of produceBlockV3 for block production, is auto enabled on deneb+ blocks",
   },
 
   broadcastValidation: {

@@ -3,16 +3,16 @@ import workerThreads from "node:worker_threads";
 import {PeerScoreStatsDump} from "@chainsafe/libp2p-gossipsub/dist/src/score/peer-score.js";
 import {PublishOpts} from "@chainsafe/libp2p-gossipsub/types";
 import {ModuleThread, Thread, Worker, spawn} from "@chainsafe/threads";
-import {PeerId, Secp256k1PeerId} from "@libp2p/interface";
-import {exportToProtobuf} from "@libp2p/peer-id-factory";
+import {privateKeyToProtobuf} from "@libp2p/crypto/keys";
+import {PrivateKey} from "@libp2p/interface";
 import {routes} from "@lodestar/api";
 import {BeaconConfig, chainConfigToJson} from "@lodestar/config";
 import type {LoggerNode} from "@lodestar/logger/node";
 import {ResponseIncoming, ResponseOutgoing} from "@lodestar/reqresp";
-import {phase0} from "@lodestar/types";
+import {Status} from "@lodestar/types";
 import {Metrics} from "../../metrics/index.js";
 import {AsyncIterableBridgeCaller, AsyncIterableBridgeHandler} from "../../util/asyncIterableToEvents.js";
-import {peerIdFromString} from "../../util/peerId.js";
+import {PeerIdStr, peerIdFromString} from "../../util/peerId.js";
 import {terminateWorkerThread, wireEventsOnMainThread} from "../../util/workerEvents.js";
 import {NetworkEventBus, NetworkEventData, networkEventDirection} from "../events.js";
 import {NetworkOptions} from "../options.js";
@@ -27,7 +27,7 @@ import {
   getReqRespBridgeRespEvents,
   reqRespBridgeEventDirection,
 } from "./events.js";
-import {INetworkCore, MultiaddrStr, NetworkWorkerApi, NetworkWorkerData, PeerIdStr} from "./types.js";
+import {INetworkCore, MultiaddrStr, NetworkWorkerApi, NetworkWorkerData} from "./types.js";
 
 // Worker constructor consider the path relative to the current working directory
 const workerDir = process.env.NODE_ENV === "test" ? "../../../lib/network/core/" : "./";
@@ -37,14 +37,15 @@ export type WorkerNetworkCoreOpts = NetworkOptions & {
   peerStoreDir?: string;
   activeValidatorCount: number;
   genesisTime: number;
-  initialStatus: phase0.Status;
+  initialStatus: Status;
+  initialCustodyGroupCount: number;
 };
 
 export type WorkerNetworkCoreInitModules = {
   opts: WorkerNetworkCoreOpts;
   config: BeaconConfig;
   logger: LoggerNode;
-  peerId: PeerId;
+  privateKey: PrivateKey;
   events: NetworkEventBus;
   metrics: Metrics | null;
   getReqRespHandler: GetReqRespHandlerFn;
@@ -63,7 +64,7 @@ const NETWORK_WORKER_EXIT_RETRY_COUNT = 3;
  */
 export class WorkerNetworkCore implements INetworkCore {
   private readonly reqRespBridgeReqCaller: AsyncIterableBridgeCaller<OutgoingRequestArgs, ResponseIncoming>;
-  private readonly reqRespBridgeRespHandler: AsyncIterableBridgeHandler<IncomingRequestArgs, ResponseOutgoing>;
+  protected readonly reqRespBridgeRespHandler: AsyncIterableBridgeHandler<IncomingRequestArgs, ResponseOutgoing>;
   private readonly reqRespBridgeEventBus = new ReqRespBridgeEventBus();
 
   constructor(private readonly modules: WorkerNetworkCoreModules) {
@@ -103,19 +104,28 @@ export class WorkerNetworkCore implements INetworkCore {
   }
 
   static async init(modules: WorkerNetworkCoreInitModules): Promise<WorkerNetworkCore> {
-    const {opts, config, peerId} = modules;
-    const {genesisTime, peerStoreDir, activeValidatorCount, localMultiaddrs, metricsEnabled, initialStatus} = opts;
+    const {opts, config, privateKey} = modules;
+    const {
+      genesisTime,
+      peerStoreDir,
+      activeValidatorCount,
+      localMultiaddrs,
+      metricsEnabled,
+      initialStatus,
+      initialCustodyGroupCount,
+    } = opts;
 
     const workerData: NetworkWorkerData = {
       opts,
       chainConfigJson: chainConfigToJson(config),
       genesisValidatorsRoot: config.genesisValidatorsRoot,
-      peerIdProto: exportToProtobuf(peerId as Secp256k1PeerId),
+      privateKeyProto: privateKeyToProtobuf(privateKey),
       localMultiaddrs,
       metricsEnabled,
       peerStoreDir,
       genesisTime,
       initialStatus,
+      initialCustodyGroupCount,
       activeValidatorCount,
       loggerOpts: modules.logger.toOpts(),
     };
@@ -136,7 +146,7 @@ export class WorkerNetworkCore implements INetworkCore {
       resourceLimits: {maxYoungGenerationSizeMb: opts.maxYoungGenerationSizeMb},
     } as ConstructorParameters<typeof Worker>[1]);
 
-    // biome-ignore lint/suspicious/noExplicitAny: <explanation>
+    // biome-ignore lint/suspicious/noExplicitAny: Don't know any specific interface for the spawn
     const networkThreadApi = (await spawn<any>(worker, {
       // A Lodestar Node may do very expensive task at start blocking the event loop and causing
       // the initialization to timeout. The number below is big enough to almost disable the timeout
@@ -172,7 +182,7 @@ export class WorkerNetworkCore implements INetworkCore {
     return this.getApi().scrapeMetrics();
   }
 
-  updateStatus(status: phase0.Status): Promise<void> {
+  updateStatus(status: Status): Promise<void> {
     return this.getApi().updateStatus(status);
   }
   reStatusPeers(peers: PeerIdStr[]): Promise<void> {
@@ -215,6 +225,12 @@ export class WorkerNetworkCore implements INetworkCore {
   }
   publishGossip(topic: string, data: Uint8Array, opts?: PublishOpts): Promise<number> {
     return this.getApi().publishGossip(topic, data, opts);
+  }
+
+  // Custody
+
+  setTargetGroupCount(count: number): Promise<void> {
+    return this.getApi().setTargetGroupCount(count);
   }
 
   // Debug

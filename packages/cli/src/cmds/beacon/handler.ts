@@ -6,9 +6,10 @@ import {ChainForkConfig, createBeaconConfig} from "@lodestar/config";
 import {LevelDbController} from "@lodestar/db";
 import {LoggerNode, getNodeLogger} from "@lodestar/logger/node";
 import {ACTIVE_PRESET, PresetName} from "@lodestar/params";
-import {ErrorAborted} from "@lodestar/utils";
+import {ErrorAborted, bytesToInt} from "@lodestar/utils";
 import {ProcessShutdownCallback} from "@lodestar/validator";
 
+import {SignableENR} from "@chainsafe/enr";
 import {BeaconNodeOptions, getBeaconConfigFromArgs} from "../../config/index.js";
 import {getNetworkBootnodes, getNetworkData, isKnownNetworkName, readBootnodes} from "../../networks/index.js";
 import {GlobalArgs, parseBeaconNodeArgs} from "../../options/index.js";
@@ -23,7 +24,7 @@ import {
 } from "../../util/index.js";
 import {getVersionData} from "../../util/version.js";
 import {initBeaconState} from "./initBeaconState.js";
-import {initPeerIdAndEnr} from "./initPeerIdAndEnr.js";
+import {initPrivateKeyAndEnr} from "./initPeerIdAndEnr.js";
 import {BeaconArgs} from "./options.js";
 import {getBeaconPaths} from "./paths.js";
 
@@ -35,10 +36,10 @@ const EIGHT_GB = 8 * 1024 * 1024 * 1024;
  * Runs a beacon node.
  */
 export async function beaconHandler(args: BeaconArgs & GlobalArgs): Promise<void> {
-  const {config, options, beaconPaths, network, version, commit, peerId, logger} = await beaconHandlerInit(args);
+  const {config, options, beaconPaths, network, version, commit, privateKey, logger} = await beaconHandlerInit(args);
 
   if (hasher.name !== "hashtree") {
-    throw Error(`Loaded incorrect hasher ${hasher.name}, expected hashtree`);
+    logger.warn(`hashtree is not supported, using hasher ${hasher.name}`);
   }
 
   const heapSizeLimit = getHeapStatistics().heap_size_limit;
@@ -85,7 +86,7 @@ export async function beaconHandler(args: BeaconArgs & GlobalArgs): Promise<void
       db,
       logger,
       processShutdownCallback,
-      peerId,
+      privateKey,
       dataDir: beaconPaths.dataDir,
       peerStoreDir: beaconPaths.peerStoreDir,
       anchorState,
@@ -173,12 +174,21 @@ export async function beaconHandlerInit(args: BeaconArgs & GlobalArgs) {
   const beaconPaths = getBeaconPaths(args, network);
   // TODO: Rename db.name to db.path or db.location
   beaconNodeOptions.set({db: {name: beaconPaths.dbDir}});
-  beaconNodeOptions.set({chain: {persistInvalidSszObjectsDir: beaconPaths.persistInvalidSszObjectsDir}});
+  beaconNodeOptions.set({
+    chain: {
+      validatorMonitorLogs: args.validatorMonitorLogs,
+      persistInvalidSszObjectsDir: beaconPaths.persistInvalidSszObjectsDir,
+      persistOrphanedBlocksDir: beaconPaths.persistOrphanedBlocksDir,
+    },
+  });
   // Add metrics metadata to show versioning + network info in Prometheus + Grafana
   beaconNodeOptions.set({metrics: {metadata: {version, commit, network}}});
-  beaconNodeOptions.set({metrics: {validatorMonitorLogs: args.validatorMonitorLogs}});
   // Add detailed version string for API node/version endpoint
   beaconNodeOptions.set({api: {commit, version}});
+
+  if (args.supernode) {
+    beaconNodeOptions.set({chain: {supernode: true}, network: {supernode: true}});
+  }
 
   // Set known depositContractDeployBlock
   if (isKnownNetworkName(network)) {
@@ -187,7 +197,7 @@ export async function beaconHandlerInit(args: BeaconArgs & GlobalArgs) {
   }
 
   const logger = initLogger(args, beaconPaths.dataDir, config);
-  const {peerId, enr} = await initPeerIdAndEnr(args, beaconPaths.beaconDir, logger);
+  const {privateKey, enr} = await initPrivateKeyAndEnr(args, beaconPaths.beaconDir, logger);
 
   if (args.discv5 !== false) {
     // Inject ENR to beacon options
@@ -201,6 +211,8 @@ export async function beaconHandlerInit(args: BeaconArgs & GlobalArgs) {
     // Deduplicate and set combined bootnodes
     beaconNodeOptions.set({network: {discv5: {bootEnrs: [...new Set(bootnodes)]}}});
   }
+
+  beaconNodeOptions.set({chain: {initialCustodyGroupCount: getInitialCustodyGroupCount(args, config, enr)}});
 
   if (args.disableLightClientServer) {
     beaconNodeOptions.set({chain: {disableLightClientServer: true}});
@@ -224,7 +236,7 @@ export async function beaconHandlerInit(args: BeaconArgs & GlobalArgs) {
   // Render final options
   const options = beaconNodeOptions.getWithDefaults();
 
-  return {config, options, beaconPaths, network, version, commit, peerId, logger};
+  return {config, options, beaconPaths, network, version, commit, privateKey, logger};
 }
 
 export function initLogger(
@@ -242,4 +254,15 @@ export function initLogger(
   }
 
   return logger;
+}
+
+function getInitialCustodyGroupCount(args: BeaconArgs & GlobalArgs, config: ChainForkConfig, enr: SignableENR): number {
+  if (args.supernode) {
+    return config.NUMBER_OF_CUSTODY_GROUPS;
+  }
+
+  const enrCgcBytes = enr.kvs.get("cgc");
+  const enrCgc = enrCgcBytes != null ? bytesToInt(enrCgcBytes, "be") : 0;
+
+  return Math.max(enrCgc, config.CUSTODY_REQUIREMENT);
 }

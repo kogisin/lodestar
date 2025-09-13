@@ -1,4 +1,4 @@
-import {EffectiveBalanceIncrements} from "@lodestar/state-transition";
+import {DataAvailabilityStatus, EffectiveBalanceIncrements} from "@lodestar/state-transition";
 import {CachedBeaconStateAllForks} from "@lodestar/state-transition";
 import {
   AttesterSlashing,
@@ -10,13 +10,7 @@ import {
   Slot,
   ValidatorIndex,
 } from "@lodestar/types";
-import {
-  DataAvailabilityStatus,
-  LVHExecResponse,
-  MaybeValidExecutionStatus,
-  ProtoBlock,
-  ProtoNode,
-} from "../protoArray/interface.js";
+import {LVHExecResponse, MaybeValidExecutionStatus, ProtoBlock, ProtoNode} from "../protoArray/interface.js";
 import {UpdateAndGetHeadOpt} from "./forkChoice.js";
 import {CheckpointWithHex} from "./store.js";
 
@@ -69,23 +63,20 @@ export enum NotReorgedReason {
   ReorgMoreThanOneSlot = "reorgMoreThanOneSlot",
   ProposerBoostNotWornOff = "proposerBoostNotWornOff",
   HeadBlockNotWeak = "headBlockNotWeak",
-  ParentBlockNotStrong = "ParentBlockNotStrong",
+  ParentBlockNotStrong = "parentBlockNotStrong",
   NotProposingOnTime = "notProposingOnTime",
+  NotProposerOfNextSlot = "notProposerOfNextSlot",
+  HeadBlockNotAvailable = "headBlockNotAvailable", // Should not happen because head block should be in cache
+  Unknown = "unknown", // A placeholder in case reason is not provided
 }
 
-export type ForkChoiceMetrics = {
-  votes: number;
-  queuedAttestations: number;
-  validatedAttestationDatas: number;
-  balancesLength: number;
-  nodes: number;
-  indices: number;
-};
+export type ShouldOverrideForkChoiceUpdateResult =
+  | {shouldOverrideFcu: true; parentBlock: ProtoBlock}
+  | {shouldOverrideFcu: false; reason: NotReorgedReason};
 
 export interface IForkChoice {
   irrecoverableError?: Error;
 
-  getMetrics(): ForkChoiceMetrics;
   /**
    * Returns the block root of an ancestor of `block_root` at the given `slot`. (Note: `slot` refers
    * to the block that is *returned*, not the one that is supplied.)
@@ -113,6 +104,16 @@ export interface IForkChoice {
     isHeadTimely?: boolean;
     notReorgedReason?: NotReorgedReason;
   };
+  /**
+   * This is called during block import when proposerBoostReorg is enabled
+   * fcu call in `importBlock()` will be suppressed if this returns true. It is also
+   * called by `predictProposerHead()` during `prepareNextSlot()`.
+   */
+  shouldOverrideForkChoiceUpdate(
+    blockRoot: RootHex,
+    secFromSlot: number,
+    currentSlot: Slot
+  ): ShouldOverrideForkChoiceUpdateResult;
   /**
    * Retrieves all possible chain heads (leaves of fork choice tree).
    */
@@ -223,6 +224,10 @@ export interface IForkChoice {
    * The same to iterateAncestorBlocks but this gets non-ancestor nodes instead of ancestor nodes.
    */
   getAllNonAncestorBlocks(blockRoot: RootHex): ProtoBlock[];
+  /**
+   * Returns both ancestor and non-ancestor blocks in a single traversal.
+   */
+  getAllAncestorAndNonAncestorBlocks(blockRoot: RootHex): {ancestors: ProtoBlock[]; nonAncestors: ProtoBlock[]};
   getCanonicalBlockAtSlot(slot: Slot): ProtoBlock | null;
   getCanonicalBlockClosestLteSlot(slot: Slot): ProtoBlock | null;
   /**

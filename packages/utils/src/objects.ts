@@ -1,7 +1,5 @@
 import Case from "case";
 
-/* eslint-disable @typescript-eslint/no-unsafe-assignment */
-
 export type KeyCase =
   | "snake"
   | "constant"
@@ -63,7 +61,7 @@ export function isEmptyObject(value: unknown): boolean {
  *
  * Inspired on lodash.mapValues, see https://lodash.com/docs/4.17.15#mapValues
  */
-// biome-ignore lint/suspicious/noExplicitAny: <explanation>
+// biome-ignore lint/suspicious/noExplicitAny: We need to use `any` type here
 export function mapValues<T extends {[K: string]: any}, R>(
   obj: T,
   iteratee: (value: T[keyof T], key: keyof T) => R

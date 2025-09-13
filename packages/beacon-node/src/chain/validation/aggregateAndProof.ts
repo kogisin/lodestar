@@ -11,7 +11,7 @@ import {IBeaconChain} from "../index.js";
 import {RegenCaller} from "../regen/index.js";
 import {
   getAttestationDataSigningRoot,
-  getCommitteeIndices,
+  getCommitteeValidatorIndices,
   getSeenAttDataKeyFromSignedAggregateAndProof,
   getShufflingForAttestationVerification,
   verifyHeadBlockAndTargetRoot,
@@ -21,7 +21,7 @@ import {getAggregateAndProofSignatureSet, getSelectionProofSignatureSet} from ".
 
 export type AggregateAndProofValidationResult = {
   indexedAttestation: IndexedAttestation;
-  committeeIndices: Uint32Array;
+  committeeValidatorIndices: Uint32Array;
   attDataRootHex: RootHex;
 };
 
@@ -104,9 +104,17 @@ async function validateAggregateAndProof(
       throw new AttestationError(GossipAction.REJECT, {code: AttestationErrorCode.BAD_TARGET_EPOCH});
     }
 
+    // Pre-deneb:
     // [IGNORE] aggregate.data.slot is within the last ATTESTATION_PROPAGATION_SLOT_RANGE slots (with a MAXIMUM_GOSSIP_CLOCK_DISPARITY allowance)
     // -- i.e. aggregate.data.slot + ATTESTATION_PROPAGATION_SLOT_RANGE >= current_slot >= aggregate.data.slot
     // (a client MAY queue future aggregates for processing at the appropriate slot).
+    // Post-deneb:
+    // [IGNORE] `aggregate.data.slot` is equal to or earlier than the `current_slot` (with a `MAXIMUM_GOSSIP_CLOCK_DISPARITY` allowance)
+    // -- i.e. `aggregate.data.slot <= current_slot`
+    //   (a client MAY queue future aggregates for processing at the appropriate slot).
+    // [IGNORE] the epoch of `aggregate.data.slot` is either the current or previous epoch
+    //   (with a `MAXIMUM_GOSSIP_CLOCK_DISPARITY` allowance)
+    // -- i.e. `compute_epoch_at_slot(aggregate.data.slot) in (get_previous_epoch(state), get_current_epoch(state))`
     verifyPropagationSlotRange(fork, chain, attSlot);
   }
 
@@ -128,7 +136,7 @@ async function validateAggregateAndProof(
     : toRootHex(ssz.phase0.AttestationData.hashTreeRoot(attData));
   if (
     !skipValidationKnownAttesters &&
-    chain.seenAggregatedAttestations.isKnown(targetEpoch, attDataRootHex, aggregationBits)
+    chain.seenAggregatedAttestations.isKnown(targetEpoch, attIndex, attDataRootHex, aggregationBits)
   ) {
     throw new AttestationError(GossipAction.IGNORE, {
       code: AttestationErrorCode.ATTESTERS_ALREADY_KNOWN,
@@ -167,16 +175,16 @@ async function validateAggregateAndProof(
 
   // [REJECT] The committee index is within the expected range
   // -- i.e. data.index < get_committee_count_per_slot(state, data.target.epoch)
-  const committeeIndices = cachedAttData
+  const committeeValidatorIndices = cachedAttData
     ? cachedAttData.committeeValidatorIndices
-    : getCommitteeIndices(shuffling, attSlot, attIndex);
+    : getCommitteeValidatorIndices(shuffling, attSlot, attIndex);
 
   // [REJECT] The number of aggregation bits matches the committee size
   // -- i.e. `len(aggregation_bits) == len(get_beacon_committee(state, aggregate.data.slot, index))`.
-  if (aggregate.aggregationBits.bitLen !== committeeIndices.length) {
+  if (aggregate.aggregationBits.bitLen !== committeeValidatorIndices.length) {
     throw new AttestationError(GossipAction.REJECT, {code: AttestationErrorCode.WRONG_NUMBER_OF_AGGREGATION_BITS});
   }
-  const attestingIndices = aggregate.aggregationBits.intersectValues(committeeIndices);
+  const attestingIndices = aggregate.aggregationBits.intersectValues(committeeValidatorIndices);
 
   const indexedAttestation: IndexedAttestation = {
     attestingIndices,
@@ -194,13 +202,13 @@ async function validateAggregateAndProof(
 
   // [REJECT] aggregate_and_proof.selection_proof selects the validator as an aggregator for the slot
   // -- i.e. is_aggregator(state, aggregate.data.slot, aggregate.data.index, aggregate_and_proof.selection_proof) returns True.
-  if (!isAggregatorFromCommitteeLength(committeeIndices.length, aggregateAndProof.selectionProof)) {
+  if (!isAggregatorFromCommitteeLength(committeeValidatorIndices.length, aggregateAndProof.selectionProof)) {
     throw new AttestationError(GossipAction.REJECT, {code: AttestationErrorCode.INVALID_AGGREGATOR});
   }
 
   // [REJECT] The aggregator's validator index is within the committee
   // -- i.e. aggregate_and_proof.aggregator_index in get_beacon_committee(state, aggregate.data.slot, aggregate.data.index).
-  if (!committeeIndices.includes(aggregateAndProof.aggregatorIndex)) {
+  if (!committeeValidatorIndices.includes(aggregateAndProof.aggregatorIndex)) {
     throw new AttestationError(GossipAction.REJECT, {code: AttestationErrorCode.AGGREGATOR_NOT_IN_COMMITTEE});
   }
 
@@ -240,10 +248,11 @@ async function validateAggregateAndProof(
   chain.seenAggregators.add(targetEpoch, aggregatorIndex);
   chain.seenAggregatedAttestations.add(
     targetEpoch,
+    attIndex,
     attDataRootHex,
     {aggregationBits, trueBitCount: attestingIndices.length},
     false
   );
 
-  return {indexedAttestation, committeeIndices, attDataRootHex};
+  return {indexedAttestation, committeeValidatorIndices, attDataRootHex};
 }
