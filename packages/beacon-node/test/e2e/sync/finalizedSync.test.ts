@@ -1,11 +1,10 @@
+import {afterEach, describe, expect, it, vi} from "vitest";
 import {fromHexString} from "@chainsafe/ssz";
 import {routes} from "@lodestar/api";
-import {EventData, EventType} from "@lodestar/api/lib/beacon/routes/events.js";
 import {ChainConfig} from "@lodestar/config";
 import {TimestampFormatCode} from "@lodestar/logger";
 import {SLOTS_PER_EPOCH} from "@lodestar/params";
 import {phase0} from "@lodestar/types";
-import {afterEach, describe, expect, it, vi} from "vitest";
 import {ChainEvent} from "../../../src/chain/index.js";
 import {waitForEvent} from "../../utils/events/resolver.js";
 import {LogLevel, TestLoggerOpts, testLogger} from "../../utils/logger.js";
@@ -20,9 +19,9 @@ describe("sync / finalized sync for fulu", () => {
   const validatorCount = 8;
   const ELECTRA_FORK_EPOCH = 0;
   const FULU_FORK_EPOCH = 1;
-  const SECONDS_PER_SLOT = 2;
+  const SLOT_DURATION_MS = 2000;
   const testParams: Partial<ChainConfig> = {
-    SECONDS_PER_SLOT,
+    SLOT_DURATION_MS,
     ALTAIR_FORK_EPOCH: ELECTRA_FORK_EPOCH,
     BELLATRIX_FORK_EPOCH: ELECTRA_FORK_EPOCH,
     CAPELLA_FORK_EPOCH: ELECTRA_FORK_EPOCH,
@@ -48,7 +47,7 @@ describe("sync / finalized sync for fulu", () => {
   it("should do a finalized sync from another BN", async () => {
     // single node at beginning, use main thread to verify bls
     const genesisSlotsDelay = 4;
-    const genesisTime = Math.floor(Date.now() / 1000) + genesisSlotsDelay * SECONDS_PER_SLOT;
+    const genesisTime = Math.floor(Date.now() / 1000) + genesisSlotsDelay * (SLOT_DURATION_MS / 1000);
 
     const testLoggerOpts: TestLoggerOpts = {
       level: LogLevel.info,
@@ -56,7 +55,7 @@ describe("sync / finalized sync for fulu", () => {
         format: TimestampFormatCode.EpochSlot,
         genesisTime,
         slotsPerEpoch: SLOTS_PER_EPOCH,
-        secondsPerSlot: SECONDS_PER_SLOT,
+        secondsPerSlot: SLOT_DURATION_MS / 1000,
       },
     };
 
@@ -99,7 +98,7 @@ describe("sync / finalized sync for fulu", () => {
         240000,
         (finalized) => finalized.epoch >= FULU_FORK_EPOCH
       ),
-      waitForEvent<EventData[EventType.head]>(
+      waitForEvent<routes.events.EventData[routes.events.EventType.head]>(
         bn.chain.emitter,
         routes.events.EventType.head,
         100000,
@@ -128,7 +127,7 @@ describe("sync / finalized sync for fulu", () => {
     const headSummary = bn.chain.forkChoice.getHead();
     const head = await bn.db.block.get(fromHexString(headSummary.blockRoot));
     if (!head) throw Error("First beacon node has no head block");
-    const waitForSynced = waitForEvent<EventData[EventType.head]>(
+    const waitForSynced = waitForEvent<routes.events.EventData[routes.events.EventType.head]>(
       bn2.chain.emitter,
       routes.events.EventType.head,
       100000,

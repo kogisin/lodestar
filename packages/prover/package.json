@@ -15,9 +15,11 @@
   "type": "module",
   "exports": {
     ".": {
+      "bun": "./src/index.ts",
       "import": "./lib/index.js"
     },
     "./browser": {
+      "bun": "./src/browser/index.ts",
       "import": "./lib/browser/index.js"
     }
   },
@@ -35,11 +37,10 @@
   },
   "types": "./lib/index.d.ts",
   "files": [
-    "lib/**/*.d.ts",
-    "lib/**/*.js",
-    "lib/**/*.js.map",
-    "*.d.ts",
-    "*.js"
+    "src",
+    "lib",
+    "bin",
+    "!**/*.tsbuildinfo"
   ],
   "scripts": {
     "clean": "rm -rf lib && rm -f *.tsbuildinfo",

@@ -1,5 +1,5 @@
 import {ChainForkConfig} from "@lodestar/config";
-import {Db, decodeNumberForDbKey, encodeNumberForDbKey, PrefixedRepository} from "@lodestar/db";
+import {Db, PrefixedRepository, decodeNumberForDbKey, encodeNumberForDbKey} from "@lodestar/db";
 import {NUMBER_OF_COLUMNS} from "@lodestar/params";
 import {ColumnIndex, Root, fulu, ssz} from "@lodestar/types";
 import {Bucket, getBucketNameByValue} from "../buckets.js";
@@ -17,7 +17,7 @@ type BlockRoot = Root;
  */
 export class DataColumnSidecarRepository extends PrefixedRepository<BlockRoot, ColumnIndex, fulu.DataColumnSidecar> {
   constructor(config: ChainForkConfig, db: Db) {
-    const bucket = Bucket.allForks_dataColumnSidecars;
+    const bucket = Bucket.fulu_dataColumnSidecars;
     super(config, db, bucket, ssz.fulu.DataColumnSidecar, getBucketNameByValue(bucket));
   }
 

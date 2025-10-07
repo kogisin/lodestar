@@ -15,15 +15,19 @@
   "type": "module",
   "exports": {
     ".": {
+      "bun": "./src/index.ts",
       "import": "./lib/index.js"
     },
     "./block": {
+      "bun": "./src/block/index.ts",
       "import": "./lib/block/index.js"
     },
     "./epoch": {
+      "bun": "./src/epoch/index.ts",
       "import": "./lib/epoch/index.js"
     },
     "./slot": {
+      "bun": "./src/slot/index.ts",
       "import": "./lib/slot/index.js"
     }
   },
@@ -37,11 +41,9 @@
     }
   },
   "files": [
-    "lib/**/*.d.ts",
-    "lib/**/*.js",
-    "lib/**/*.js.map",
-    "*.d.ts",
-    "*.js"
+    "src",
+    "lib",
+    "!**/*.tsbuildinfo"
   ],
   "scripts": {
     "clean": "rm -rf lib && rm -f *.tsbuildinfo",
